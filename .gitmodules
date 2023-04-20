@@ -1,0 +1,3 @@
+[submodule "nturt_stm32_module"]
+	path = nturt_stm32_module
+	url = https://github.com/NTURacingTeam/nturt_stm32_module.git
