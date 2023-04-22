@@ -2,80 +2,150 @@
 
 ## Introduction
 
-## Peripherals Used
+- Pins are denoted as `PIN`, e.g. `5V`, `PA0`, etc.
 
-- TIM3 -> PWM for servo
-- ADC0 channel * 2 -> Grayscale sensor
-- GPIO * 4 (pull down) -> Microswitch
+### STM32 Peripherals Used
 
-## Hardware Pin
+- TIM1 channel * 4, TIM3 channel * 4 -> Servo
+- ADC0 channel * 4, TIM8 -> Grayscale sensor
+- GPIO * 3 (pull-down) -> Button
+- GPIO * 3 -> LED
+- GPIO * 4 (pull-down) -> Microswitch
+- GPIO * 4 -> Motor controller
 
-### Servo - MG996R
+## Power
 
-1. Front left -> TIM3 PWM1 (PA6)
-2. Front right -> TIM3 PWM2 (PA7)
-3. Rear left -> TIM3 PWM3 (PB0)
-4. Rear right -> TIM3 PWM4 (PB1)
-5. Other servo1 -> TIM1 PWM1 (PA8)
-6. Other servo2 -> TIM1 PWM2 (PA9)
-7. Other servo3 -> TIM1 PWM3 (PA10)
-8. Other servo4 -> TIM1 PWM4 (PA11)
+- Battery power `VBAT`
+- 5V `5V`
+- 3.3V `3V3`
 
-#### Bonus
+Common Ground for all
 
-Servo timing
+### Battery - 18650 * 2
 
-![](https://upload.wikimedia.org/wikipedia/commons/thumb/6/6c/Servomotor_Timing_Diagram.svg/1280px-Servomotor_Timing_Diagram.svg.png)
+Battery `VCC` -> `VBAT`
 
-Servo pinout
+### Linear Voltage Regulator
 
-![](https://www.botnroll.com/11296-medium_default/mg996r-servo-metal-gear-high-torque.jpg)
+#### 5V
 
-### Motor Controller - TB6612FNG
+- `IN` -> `VBAT`
+- `OUT` -> `5V`
 
-1. Front1 -> GPIO (B12)
-2. Front2 -> GPIO (B13)
-3. Rear1 -> GPIO (B14)
-4. Rear2 -> GPIO (B15)
+#### 3.3V
 
-#### Bonus
+- `IN` -> `VBAT`
+- `OUT` -> `3V3`
 
-TB6612FNG pinout
+## Wiring
 
-![](https://content.instructables.com/FCN/O9VG/JHATTMWR/FCNO9VGJHATTMWR.png)
+### Nucleo
 
-[datasheet](https://www.sparkfun.com/datasheets/Robotics/TB6612FNG.pdf)
+- Nucleo `5V` -> rocker switch -> `5V`
 
-### Grayscale Sensor
+### Button
 
-1. Left -> ADC1 IN14 (PC4)
-2. Right -> ADC IN15 (PC5)
-3. Other sensor1 -> ADC IN0 (PA0)
-4. Other sensor2 -> ADC IN1 (PA1)
+- Button1 `NO` -> Nucleo GPIO `PB6`
+- Button2 `NO` -> Nucleo GPIO `PB1`
+- Button3 `NO` -> Nucleo GPIO `PB2`
+
+All `C` -> `3V3`
 
 ### Microswitch - 10T85
 
-1. Front bottom -> GPIO (PC0)
-2. Front top -> GPIO (PC1)
-3. Rear bottom -> GPIO (PC2)
-4. Rear top -> GPIO (PC3)
+- MicroFB `NO` -> Nucleo GPIO `PC11`
+- MicroFT `NO` -> Nucleo GPIO `PC10`
+- MicroRB `NO` -> Nucleo GPIO `PD2`
+- MicroRT `NO` -> Nucleo GPIO `PC12`
 
-### Buck Converter - MP1584EN
+All `C` -> `3V3`
 
-#### Bonus
+### Analog Sensor
 
-MP1584EN pinout
+- AngFL1 `OUT` -> Nucleo ADC1 IN13 `PC3`
+- AngFL2 `OUT` -> Nucleo ADC1 IN12 `PC2`
+- AngFR1 `OUT` -> Nucleo ADC1 IN10 `PC0`
+- AngFR2 `OUT` -> Nucleo ADC1 IN11 `PC1`
+- AngRL `OUT` -> Nucleo ADC1 IN7 `PA7`
+- AngRR `OUT` -> Nucleo ADC1 IN15 `PC5`
+- All `VCC` -> `3V3`
 
-![](https://components101.com/sites/default/files/component_pin/MP1584-Pinout.jpg)
+### LED
 
-## NUCLEO-F446RE Pinout
+- LED_GREEN `VCC` -> Nucleo GPIO `PB10`
+- LED_YELLOW `VCC` -> Nucleo GPIO `PB5`
+- LED_RED `VCC` -> Nucleo GPIO `PB4`
 
-### Arduino Pinout
+### Servo - MG996R
 
-![](https://os.mbed.com/media/uploads/jeromecoutant/nucleo_f446re_arduino_left_2021_10_26.png)
-![](https://os.mbed.com/media/uploads/jeromecoutant/nucleo_f446re_arduino_right_2021_10_26.png)
+- ServoFL `PWM` -> Nucleo TIM1 PWM1 `PA8`
+- ServoFR `PWM` -> Nucleo TIM1 PWM3 `PA10`
+- ServoRL `PWM` -> Nucleo TIM3 PWM4 `PC9`
+- ServoRR `PWM` -> Nucleo TIM3 PWM3 `PC8`
+- ServoRev1 `PWM` -> Nucleo TIM1 PWM2 `PA9`
+- ServoRev2 `PWM` -> Nucleo TIM3 PWM2 `PC7`
+- ServoRev3 `PWM` -> Nucleo TIM3 PWM1 `PA6`
+- ServoRev4 `PWM` -> Nucleo TIM1 PWM4 `PA11`
+- All `VCC` -> `VBAT`
 
-### ST Morpho Pinout
+### Motor Controller - DRV8833
 
-![](https://os.mbed.com/media/uploads/jeromecoutant/nucleo_f446re_morpho_left_2021_10_26.png)
-![](https://os.mbed.com/media/uploads/jeromecoutant/nucleo_f446re_morpho_right_2021_10_26.png)
+- MotConRight `AIN1` -> Nucleo GPIO `PB13`
+- MotConRight `AIN2` -> Nucleo GPIO `PC4`
+- MotConRight `BIN1` -> Nucleo GPIO `PB14`
+- MotConRight `BIN2` -> Nucleo GPIO `PB15`
+- MotConLeft `AIN1` -> Nucleo GPIO `PA1`
+- MotConLeft `AIN2` -> Nucleo GPIO `PA0`
+- MotConLeft `BIN1` -> Nucleo GPIO `PA4`
+- MotConLeft `BIN2` -> Nucleo GPIO `PB0`
+- All `VM` -> `VBAT`
+- All `STBY` -> `3V3`
+
+### Motor
+
+- MotFL `Red` -> MotConLeft `BO1`
+- MotFL `Black` -> MotConLeft `BO2`
+- MotFR `Red` -> MotConRight `AO1`
+- MotFR `Black` -> MotConRight `AO2`
+- MotRL `Red` -> MotConLeft `AO1`
+- MotRL `Black` -> MotConLeft `AO2`
+- MotRR `Red` -> MotConRight `BO1`
+- MotRR `Black` -> MotConRight `BO2`
+
+<div style="page-break-after: always;"></div>
+
+## Appendix
+
+### MCU - NUCLEO-F446RE
+
+#### Arduino Pinout
+
+<img src="https://os.mbed.com/media/uploads/jeromecoutant/nucleo_f446re_arduino_left_2021_10_26.png"  width="80%" height="40%">
+<img src="https://os.mbed.com/media/uploads/jeromecoutant/nucleo_f446re_arduino_right_2021_10_26.png"  width="80%" height="40%">
+
+<div style="page-break-after: always;"></div>
+
+#### ST Morpho Pinout
+
+<img src="https://os.mbed.com/media/uploads/jeromecoutant/nucleo_f446re_morpho_left_2021_10_26.png"  width="90%" height="45%">
+<img src="https://os.mbed.com/media/uploads/jeromecoutant/nucleo_f446re_morpho_right_2021_10_26.png"  width="90%" height="45%">
+
+<div style="page-break-after: always;"></div>
+
+### Servo - MG996R
+
+#### Timing
+
+<img src="https://upload.wikimedia.org/wikipedia/commons/thumb/6/6c/Servomotor_Timing_Diagram.svg/1280px-Servomotor_Timing_Diagram.svg.png"  width="70%" height="35%">
+
+#### Pinout
+
+<img src="https://www.botnroll.com/11296-medium_default/mg996r-servo-metal-gear-high-torque.jpg"  width="70%" height="35%">
+
+<div style="page-break-after: always;"></div>
+
+### Motor Controller - DRV8833
+
+#### Pinout
+
+<img src="https://electropeak.com/learn/wp-content/uploads/2021/01/DRV8833-Dual-Driver-Pinout.jpg"  width="90%" height="45%">

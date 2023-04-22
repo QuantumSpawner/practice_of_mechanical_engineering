@@ -1,6 +1,8 @@
 *.launch
+*.csv
 .settings
 .vscode
+__pycache__
 Debug
 Drivers
 Middlewares

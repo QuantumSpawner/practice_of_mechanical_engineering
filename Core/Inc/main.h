@@ -47,6 +47,8 @@ extern CAN_HandleTypeDef hcan1;
 
 extern IWDG_HandleTypeDef hiwdg;
 
+extern TIM_HandleTypeDef htim1;
+
 extern TIM_HandleTypeDef htim3;
 
 extern TIM_HandleTypeDef htim8;

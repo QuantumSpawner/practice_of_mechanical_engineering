@@ -1,29 +1,58 @@
-import numpy as np
 import serial
+import csv
+import statistics
 
-serial = serial.Serial('/dev/ttyACM0', 115200)
+# Configure constants and data names
+SERIAL_PORT = '/dev/ttyACM0'
+BAUD_RATE = 115200
+DATA_LIST = ['left', 'right']
+DATA_NAME = 'data'
 
-data = np.empty(0)
+# Initialize serial connection
+ser = serial.Serial(SERIAL_PORT, BAUD_RATE)
 
-try:
-    while True:
-        # Read the data from the serial port
-        line = serial.readline().decode('utf-8').strip()
-        # Append the data to the data array
-        data = np.append(data, float(line))
-
-finally:
-    # Close the serial port
-    serial.close()
-
-    # Calculate the mean and standard deviation of the data
-    mean = np.mean(data)
-    std = np.std(data)
-    stats = np.array([mean, std])
-    print(f'Mean: {mean}, Standard Deviation: {std}')
-
-    # Save the data to a CSV file with the header
-    np.savetxt('data.csv', data, delimiter=',', header='data')
-
-    # Save the stats to a CSV file with the header
-    np.savetxt('stats.csv', stats.reshape(-1, 2), delimiter=',', header='mean,std')
+# Open CSV file for writing
+with open(f'{DATA_NAME}.csv', 'w', newline='') as csvfile:
+    writer = csv.writer(csvfile, delimiter=',')
+    writer.writerow(DATA_LIST) # write headers to CSV file
+    
+    # Initialize lists for storing data
+    data_lists = {val: [] for val in DATA_LIST}
+    
+    try:
+        # Continuously read data from serial and write to CSV file
+        while True:
+            data = ser.readline().decode().strip()
+            data_values = data.split()
+            if len(data_values) == len(DATA_LIST):
+                try:
+                    data_dict = dict(zip(DATA_LIST, map(float, data_values)))
+                    if all(data_dict[val] < 1 for val in DATA_LIST):
+                        # Write data to CSV file
+                        writer.writerow([data_dict[val] for val in DATA_LIST])
+                        csvfile.flush()
+                        
+                        # Append data to lists
+                        for val in DATA_LIST:
+                            data_lists[val].append(data_dict[val])
+                except ValueError:
+                    pass
+    except KeyboardInterrupt:
+        # Calculate mean and standard deviation of data
+        stats_list = [['data', 'mean', 'stddev']]
+        for val in DATA_LIST:
+            data_mean = statistics.mean(data_lists[val])
+            data_stddev = statistics.stdev(data_lists[val])
+            stats_list.append([val, data_mean, data_stddev])
+        
+        # Write mean and standard deviation to CSV file
+        with open(f'{DATA_NAME}_stats.csv', 'w', newline='') as statsfile:
+            writer = csv.writer(statsfile, delimiter=',')
+            for row in stats_list:
+                writer.writerow(row)
+        
+        # Print mean and standard deviation of data
+        for val in DATA_LIST:
+            data_mean = statistics.mean(data_lists[val])
+            data_stddev = statistics.stdev(data_lists[val])
+            print(f"{val} mean: {data_mean}, {val} std. deviation: {data_stddev}")
