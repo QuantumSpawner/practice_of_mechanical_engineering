@@ -94,7 +94,7 @@
 #define configTIMER_TASK_STACK_DEPTH             256
 
 /* The following flag must be enabled only when using newlib */
-#define configUSE_NEWLIB_REENTRANT          1
+#define configUSE_NEWLIB_REENTRANT          0
 
 /* CMSIS-RTOS V2 flags */
 #define configUSE_OS2_THREAD_SUSPEND_RESUME  1
@@ -154,7 +154,22 @@ See http://www.FreeRTOS.org/RTOS-Cortex-M3-M4.html. */
 /* Normal assert() semantics without relying on the provision of an assert.h
 header file. */
 /* USER CODE BEGIN 1 */
-#define configASSERT( x ) if ((x) == 0) {taskDISABLE_INTERRUPTS(); for( ;; );}
+#ifdef DEBUG
+
+extern void __module_assert_fail(const char *assertion, const char *file,
+                          unsigned int line, const char *function);
+#define configASSERT(expr)                                       \
+  do {                                                           \
+    if (!(expr)) {                                               \
+      __module_assert_fail(#expr, __FILE__, __LINE__, __func__); \
+    }                                                            \
+  } while (0)
+
+#else
+
+#define configASSERT(expr) (void)(expr)
+
+#endif  // DEBUG
 /* USER CODE END 1 */
 
 /* Definitions that map the FreeRTOS port interrupt handlers to their CMSIS

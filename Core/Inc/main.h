@@ -43,7 +43,7 @@ extern "C" {
 /* USER CODE BEGIN EC */
 extern ADC_HandleTypeDef hadc1;
 
-extern CAN_HandleTypeDef hcan1;
+extern I2C_HandleTypeDef hi2c1;
 
 extern IWDG_HandleTypeDef hiwdg;
 

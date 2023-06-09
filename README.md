@@ -4,7 +4,7 @@
 
 - Pins are denoted as `PIN`, e.g. `5V`, `PA0`, etc.
 
-### STM32 Peripherals Used
+## STM32 Peripherals Used
 
 - TIM1 channel * 4, TIM3 channel * 4 -> Servo
 - ADC0 channel * 4, TIM8 -> Grayscale sensor
@@ -45,9 +45,9 @@ Battery `VCC` -> `VBAT`
 
 ### Button
 
-- Button1 `NO` -> Nucleo GPIO `PB6`
-- Button2 `NO` -> Nucleo GPIO `PB1`
-- Button3 `NO` -> Nucleo GPIO `PB2`
+- Button1 `NO` -> Nucleo GPIO `PB1`
+- Button2 `NO` -> Nucleo GPIO `PB2`
+- Button3 `NO` -> Nucleo GPIO `PB6`
 
 All `C` -> `3V3`
 

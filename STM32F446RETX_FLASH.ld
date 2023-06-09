@@ -85,13 +85,15 @@ SECTIONS
     . = ALIGN(4);
   } >FLASH
 
-  .ARM.extab   : {
+  .ARM.extab :
+  {
     . = ALIGN(4);
     *(.ARM.extab* .gnu.linkonce.armextab.*)
     . = ALIGN(4);
   } >FLASH
 
-  .ARM : {
+  .ARM :
+  {
     . = ALIGN(4);
     __exidx_start = .;
     *(.ARM.exidx*)
@@ -99,7 +101,7 @@ SECTIONS
     . = ALIGN(4);
   } >FLASH
 
-  .preinit_array     :
+  .preinit_array :
   {
     . = ALIGN(4);
     PROVIDE_HIDDEN (__preinit_array_start = .);

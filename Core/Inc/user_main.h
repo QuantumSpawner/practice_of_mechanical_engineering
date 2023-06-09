@@ -7,34 +7,22 @@
 // stm32 include
 #include "main.h"
 
-/* init function -------------------------------------------------------------*/
+// stm32_module include
+#include "stm32_module/stm32_module.h"
+
+// project include
+#include "simple_motor_controller.h"
+
+/* exported variable ---------------------------------------------------------*/
+extern ButtonMonitor button_monitor;
+
+extern LedController led_controller;
+
+extern ServoController servo_controller;
+
+extern MotorController motor_controller;
+
+/* entry point ---------------------------------------------------------------*/
 void user_init(void);
-
-void button_init(void);
-
-void filter_init(void);
-
-void led_init(void);
-
-void servo_init(void);
-
-void motor_init(void);
-
-/* task code -----------------------------------------------------------------*/
-void user_task_code(void *argument);
-
-void max_power_test(void *argument);
-
-void max_power_button_callback(void *argument, const GPIO_PinState state);
-
-void lift_test(void *argument);
-
-void lift_button_callback(void *_argument, const GPIO_PinState state);
-
-void path_find_test(void *argument);
-
-void path_find_button_callback(void *argument, const GPIO_PinState state);
-
-void print_test(void *argument);
 
 #endif  // USER_MAIN_H

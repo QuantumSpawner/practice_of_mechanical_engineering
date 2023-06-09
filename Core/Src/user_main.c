@@ -12,59 +12,114 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
+// mpu6050 include
+#include "driver_mpu6050_dmp.h"
+
 // stm32_module include
 #include "stm32_module/stm32_module.h"
 
 // project include
+#include "eeprom.h"
+#include "filter.h"
+#include "path_track.h"
 #include "project_def.h"
 #include "simple_motor_controller.h"
 
-/* static variable -----------------------------------------------------------*/
-// adc
-uint16_t adc1_buffer[NUM_ANALOG];
-
 /* module --------------------------------------------------------------------*/
 // button
-static ButtonMonitor button_monitor;
+ButtonMonitor button_monitor;
 static struct button_cb button_cb[NUM_BUTTON];
 
-// filter
-static MovingAverageFilter
-    grayscale_moving_average_filter[NUM_MOVING_AVERAGE_FILTER];
-static float
-    grayscale_moving_average_buffer[NUM_MOVING_AVERAGE_FILTER]
-                                   [MOVING_AVERAGE_FILTER_MOVING_AVERAGE_SIZE];
-static NormalizeFilter grayscale_normalize_filer[NUM_NORMALIZE_FILTER];
-
 // led
-static LedController led_controller;
+LedController led_controller;
 static struct led_cb led_cb[NUM_LED];
 
 // servo
-static ServoController servo_controller;
+ServoController servo_controller;
 static struct servo_cb servo_cb[NUM_SERVO];
 
 // motor
-static MotorController motor_controller;
+MotorController motor_controller;
 static struct motor_cb motor_cb[NUM_MOTOR];
 
 // freertos task
 static TaskHandle_t user_task_handle;
+static TaskHandle_t running_indicator_task_handle;
+static TaskHandle_t mpu6050_task_handle;
+
 static StaticTask_t user_task_cb;
+static StaticTask_t running_indicator_task_cb;
+static StaticTask_t mpu6050_task_cb;
+
 static StackType_t user_task_stack[USER_TASK_STACK_SIZE];
+static StackType_t running_indicator_task_stack[configMINIMAL_STACK_SIZE];
+static StackType_t mpu6050_task_stack[MPU6050_TASK_STACK_SIZE];
+
+// control flags
+static volatile bool is_45_deg = false, is_90_deg = false;
+
+/* static function prototype -------------------------------------------------*/
+#if defined(MAX_POWER_TEST)
+static void max_power_test(void *argument);
+static void max_power_button_callback(void *argument,
+                                      const GPIO_PinState state);
+#elif defined(LIFT_TEST)
+static void lift_test(void *argument);
+static void lift_button_callback(void *_argument, const GPIO_PinState state);
+#elif defined(GO_STRAIGHT_TEST)
+static void go_straight_test(void *argument);
+static void go_straight_button_callback(void *argument,
+                                        const GPIO_PinState state);
+#elif defined(PATH_TRACK_TEST)
+static void path_track_test(void *argument);
+static void path_track_button_callback(void *argument,
+                                       const GPIO_PinState state);
+#elif defined(BUTTON_TEST)
+static void button_test(void *argument);
+static void button_test_button_callback(void *_argument,
+                                        const GPIO_PinState state);
+#elif defined(COMPONENT_TEST)
+static void component_test(void *argument);
+static void component_test_button_callback(void *_argument,
+                                           const GPIO_PinState state);
+#elif defined(PRINT_TEST)
+static void print_test(void *argument);
+#else
+static void user_task_code(void *argument);
+static void user_button_callback(void *_argument, const GPIO_PinState state);
+static void stop_wings_button_callback(void *_argument,
+                                       const GPIO_PinState state);
+static void operate_wings_button_callback(void *_argument,
+                                          const GPIO_PinState state);
+#endif
+
+static void running_indicator_task_code(void *argument);
+static void mpu6050_task_code(void *argument);
+
+static void button_init();
+static void led_init();
+static void servo_init();
+static void motor_init();
+
+static void a_receive_callback(uint8_t type);
 
 /* function ------------------------------------------------------------------*/
 void user_init() {
   // module init
+  if (HAL_FLASH_Unlock() != HAL_OK) {
+    Error_Handler();
+  }
+  if (EE_Init() != HAL_OK) {
+    Error_Handler();
+  }
+  if (mpu6050_dmp_init(0x68, a_receive_callback, NULL, NULL) != 0) {
+    Error_Handler();
+  }
   button_init();
   filter_init();
   led_init();
   servo_init();
   motor_init();
-
-  // stm32 init
-  HAL_ADC_Start_DMA(&hadc1, (uint32_t *)adc1_buffer, NUM_ANALOG);
-  HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_1);
 
   // task start
 #if defined(MAX_POWER_TEST)
@@ -75,39 +130,59 @@ void user_init() {
   user_task_handle =
       xTaskCreateStatic(lift_test, "lift_test", USER_TASK_STACK_SIZE, NULL,
                         TaskPriorityNormal, user_task_stack, &user_task_cb);
-#elif defined(PATH_FIND_TEST)
+#elif defined(GO_STRAIGHT_TEST)
   user_task_handle = xTaskCreateStatic(
-      path_find_test, "path_find_test", USER_TASK_STACK_SIZE, NULL,
+      go_straight_test, "go_straight_test", USER_TASK_STACK_SIZE, NULL,
+      TaskPriorityNormal, user_task_stack, &user_task_cb);
+#elif defined(PATH_TRACK_TEST)
+  user_task_handle = xTaskCreateStatic(
+      path_track_test, "path_track_test", USER_TASK_STACK_SIZE, NULL,
+      TaskPriorityNormal, user_task_stack, &user_task_cb);
+#elif defined(BUTTON_TEST)
+  user_task_handle =
+      xTaskCreateStatic(button_test, "button_test", USER_TASK_STACK_SIZE, NULL,
+                        TaskPriorityNormal, user_task_stack, &user_task_cb);
+#elif defined(COMPONENT_TEST)
+  user_task_handle = xTaskCreateStatic(
+      component_test, "component_test", USER_TASK_STACK_SIZE, NULL,
+      TaskPriorityNormal, user_task_stack, &user_task_cb);
+#elif defined(PRINT_TEST)
+  user_task_handle =
+      xTaskCreateStatic(print_test, "print_test", USER_TASK_STACK_SIZE, NULL,
+                        TaskPriorityNormal, user_task_stack, &user_task_cb);
+#elif !defined(WRITE_EEPROM_TEST)
+  user_task_handle = xTaskCreateStatic(
+      user_task_code, "user_task_code", USER_TASK_STACK_SIZE, NULL,
       TaskPriorityNormal, user_task_stack, &user_task_cb);
 #endif
+
+  running_indicator_task_handle = xTaskCreateStatic(
+      running_indicator_task_code, "running_indicator_task_code",
+      configMINIMAL_STACK_SIZE, NULL, TaskPriorityNormal,
+      running_indicator_task_stack, &running_indicator_task_cb);
+  mpu6050_task_handle = xTaskCreateStatic(
+      mpu6050_task_code, "mpu6050_task_code", MPU6050_TASK_STACK_SIZE, NULL,
+      TaskPriorityNormal, mpu6050_task_stack, &mpu6050_task_cb);
 }
 
-void user_task_code(void *argument) {
-  (void)argument;
-
-  while (1) {
-    vTaskDelay(1);
-  }
-}
 /* max_power_test ------------------------------------------------------------*/
-void max_power_test(void *argument) {
+#if defined(MAX_POWER_TEST)
+static void max_power_test(void *argument) {
   (void)argument;
-
-  ServoController_set_direction(&servo_controller, SERVO_WHEEL_FL,
-                                SERVO_COUNTER_CLOCKWISE);
-  ServoController_set_direction(&servo_controller, SERVO_WHEEL_FR,
-                                SERVO_CLOCKWISE);
 
   vTaskDelete(NULL);
 }
 
-void max_power_button_callback(void *argument, const GPIO_PinState state) {
+static void max_power_button_callback(void *argument,
+                                      const GPIO_PinState state) {
   (void)argument;
 
   if (state == GPIO_PIN_RESET) {
     LedController_turn_on(&led_controller, LED_BUILTIN);
     ServoController_set_duty(&servo_controller, SERVO_WHEEL_FL, 1);
     ServoController_set_duty(&servo_controller, SERVO_WHEEL_FR, 1);
+    ServoController_set_duty(&servo_controller, SERVO_WHEEL_RL, 1);
+    ServoController_set_duty(&servo_controller, SERVO_WHEEL_RR, 1);
 
     MotorController_set(&motor_controller, MOTOR_FL, MotorForward);
     MotorController_set(&motor_controller, MOTOR_FR, MotorForward);
@@ -117,6 +192,8 @@ void max_power_button_callback(void *argument, const GPIO_PinState state) {
     LedController_turn_off(&led_controller, LED_BUILTIN);
     ServoController_set_duty(&servo_controller, SERVO_WHEEL_FL, 0);
     ServoController_set_duty(&servo_controller, SERVO_WHEEL_FR, 0);
+    ServoController_set_duty(&servo_controller, SERVO_WHEEL_RL, 0);
+    ServoController_set_duty(&servo_controller, SERVO_WHEEL_RR, 0);
 
     MotorController_set(&motor_controller, MOTOR_FL, MotorStop);
     MotorController_set(&motor_controller, MOTOR_FR, MotorStop);
@@ -125,163 +202,245 @@ void max_power_button_callback(void *argument, const GPIO_PinState state) {
   }
 }
 
+#elif defined(LIFT_TEST)
 /* lift_test -----------------------------------------------------------------*/
-volatile bool start_lift_test = false, lift_at_button, lift_at_top = false;
-GPIO_PinState button[NUM_BUTTON];
-void lift_test(void *argument) {
+static void lift_test(void *argument) {
   (void)argument;
-
-  // wait for button to be pressed
-  while (!start_lift_test) {
-    vTaskDelay(10);
-  }
-
-  LedController_turn_on(&led_controller, LED_BUILTIN);
-  for (int i = 0; i < NUM_BUTTON_MICRO; i++) {
-    ButtonMonitor_read_state(&button_monitor, BUTTON_MICRO(i),
-                             &button[BUTTON_MICRO(i)]);
-  }
-
-  if (button[BUTTON_MICRO_FB] != GPIO_PIN_SET ||
-      button[BUTTON_MICRO_RB] != GPIO_PIN_SET) {
-    lift_at_button = false;
-    MotorController_set(&motor_controller, MOTOR_FL, MotorBackward);
-    MotorController_set(&motor_controller, MOTOR_FR, MotorBackward);
-    MotorController_set(&motor_controller, MOTOR_RL, MotorBackward);
-    MotorController_set(&motor_controller, MOTOR_RR, MotorBackward);
-  } else {
-    lift_at_button = true;
-  }
-
-  // wait for lit to reset
-  while (!lift_at_button) {
-    vTaskDelay(10);
-  }
-
-  LedController_turn_off(&led_controller, LED_BUILTIN);
-  MotorController_set(&motor_controller, MOTOR_FL, MotorForward);
-  MotorController_set(&motor_controller, MOTOR_FR, MotorForward);
-  MotorController_set(&motor_controller, MOTOR_RL, MotorForward);
-  MotorController_set(&motor_controller, MOTOR_RR, MotorForward);
-
-  // wait for lit to reach top
-  while (!lift_at_top) {
-    vTaskDelay(10);
-  }
-
-  LedController_turn_on(&led_controller, LED_BUILTIN);
-  MotorController_set(&motor_controller, MOTOR_FL, MotorStop);
-  MotorController_set(&motor_controller, MOTOR_FR, MotorStop);
-  MotorController_set(&motor_controller, MOTOR_RL, MotorStop);
-  MotorController_set(&motor_controller, MOTOR_RR, MotorStop);
 
   vTaskDelete(NULL);
 }
 
-void lift_button_callback(void *_argument, const GPIO_PinState state) {
+static void operate_wings_button_callback(void *_argument,
+                                          const GPIO_PinState state) {
   uint32_t argument = (uint32_t)_argument;
 
-  button[argument] = state;
+  GPIO_PinState button_state;
+  switch (argument) {
+    case BUTTON1:
+      if (state == GPIO_PIN_SET) {
+        ButtonMonitor_read_state(&button_monitor, BUTTON_MICRO_FB,
+                                 &button_state);
+        if (button_state != GPIO_PIN_SET) {
+          MotorController_set(&motor_controller, MOTOR_RR, MotorForward);
+        }
+      } else {
+        MotorController_set(&motor_controller, MOTOR_RR, MotorStop);
+      }
+      break;
 
-  if (argument == BUTTON_BUILTIN) {
-    if (state == GPIO_PIN_RESET) {
-      start_lift_test = true;
-    }
-  } else if (argument == BUTTON_MICRO_FB) {
-    if (state == GPIO_PIN_SET && button[BUTTON_MICRO_RB] == GPIO_PIN_SET) {
-      lift_at_button = true;
-    }
-  } else if (argument == BUTTON_MICRO_RB) {
-    if (state == GPIO_PIN_SET && button[BUTTON_MICRO_FB] == GPIO_PIN_SET) {
-      lift_at_button = true;
-    }
-  } else if (argument == BUTTON_MICRO_FT) {
-    if (state == GPIO_PIN_SET && button[BUTTON_MICRO_RT] == GPIO_PIN_SET) {
-      lift_at_top = true;
-    }
-  } else if (argument == BUTTON_MICRO_RT) {
-    if (state == GPIO_PIN_SET && button[BUTTON_MICRO_FT] == GPIO_PIN_SET) {
-      lift_at_top = true;
-    }
+    case BUTTON2:
+      if (state == GPIO_PIN_SET) {
+        ButtonMonitor_read_state(&button_monitor, BUTTON_MICRO_FT,
+                                 &button_state);
+        if (button_state != GPIO_PIN_SET) {
+          MotorController_set(&motor_controller, MOTOR_RR, MotorBackward);
+        }
+      } else {
+        MotorController_set(&motor_controller, MOTOR_RR, MotorStop);
+      }
+      break;
+
+    default:
+      break;
   }
 }
 
-/* path_find_test ------------------------------------------------------------*/
-volatile bool start_path_find_test = false;
-void path_find_test(void *argument) {
-  (void)argument;
+static void stop_wings_button_callback(void *_argument,
+                                       const GPIO_PinState state) {
+  uint32_t argument = (uint32_t)_argument;
 
-  // wait for button to be pressed
-  while (!start_path_find_test) {
-    vTaskDelay(10);
+  switch (argument) {
+    case BUTTON_MICRO_FB:
+      if (state == GPIO_PIN_SET) {
+        MotorController_set(&motor_controller, MOTOR_RR, MotorStop);
+      }
+      break;
+
+    case BUTTON_MICRO_FT:
+      if (state == GPIO_PIN_SET) {
+        MotorController_set(&motor_controller, MOTOR_RR, MotorStop);
+      }
+      break;
+
+    default:
+      break;
   }
+}
+
+#elif defined(GO_STRAIGHT_TEST)
+/* go_straight_test ----------------------------------------------------------*/
+static volatile bool start_go_straight_test = false;
+static void go_straight_test(void *argument) {
+  // wait for button to be pressed
+  xTaskNotifyWait(0, 0, NULL, portMAX_DELAY);
 
   LedController_turn_on(&led_controller, LED_BUILTIN);
-  ServoController_set_direction(&servo_controller, SERVO_WHEEL_FL,
-                                SERVO_COUNTER_CLOCKWISE);
-  ServoController_set_direction(&servo_controller, SERVO_WHEEL_FR,
-                                SERVO_CLOCKWISE);
+  ServoController_set_duty(&servo_controller, SERVO_WHEEL_FL,
+                           SERVO_SPEED_MAXIMUM);
+  ServoController_set_duty(&servo_controller, SERVO_WHEEL_FR,
+                           SERVO_SPEED_MAXIMUM);
+  ServoController_set_duty(&servo_controller, SERVO_WHEEL_RL,
+                           SERVO_SPEED_MAXIMUM);
+  ServoController_set_duty(&servo_controller, SERVO_WHEEL_RR,
+                           SERVO_SPEED_MAXIMUM);
 
-  ServoController_set_duty(&servo_controller, SERVO_WHEEL_FL, 1);
-  ServoController_set_duty(&servo_controller, SERVO_WHEEL_FR, 1);
-
-  // initialize to 0 for the filters to initialize
-  float grayscale_left = 0, grayscale_right = 0;
-  while (1) {
-    NormalizeFilter_get_filtered_data(&grayscale_normalize_filer[ANALOG_FL1],
-                                      &grayscale_left);
-    NormalizeFilter_get_filtered_data(&grayscale_normalize_filer[ANALOG_FR1],
-                                      &grayscale_right);
-
-    float servo_left_duty, servo_right_duty;
-    if (grayscale_left < ANALOG_LOWER_THRESHOLD &&
-        grayscale_right < ANALOG_LOWER_THRESHOLD) {
-      servo_left_duty = SERVO_SPEED_STOP;
-      servo_right_duty = SERVO_SPEED_STOP;
-
-    } else if (grayscale_left < ANALOG_LOWER_THRESHOLD) {
-      servo_left_duty = SERVO_SPEED_MINIMUM;
-      servo_right_duty = SERVO_SPEED_MAXIMUM;
-
-    } else if (grayscale_right < ANALOG_LOWER_THRESHOLD) {
-      servo_left_duty = SERVO_SPEED_MAXIMUM;
-      servo_right_duty = SERVO_SPEED_MINIMUM;
-
-    } else {
-      float grayscale_difference_ratio = (grayscale_left - grayscale_right) /
-                                         (grayscale_left + grayscale_right);
-
-      if (grayscale_difference_ratio > 0) {
-        servo_left_duty = SERVO_SPEED_MAXIMUM;
-        servo_right_duty = SERVO_SPEED_MAXIMUM -
-                           SERVO_SPEED_REAGE * grayscale_difference_ratio;
-
-      } else {
-        servo_left_duty = SERVO_SPEED_MAXIMUM +
-                          SERVO_SPEED_REAGE * grayscale_difference_ratio;
-        servo_right_duty = SERVO_SPEED_MAXIMUM;
-      }
-    }
-
-    ServoController_set_duty(&servo_controller, SERVO_WHEEL_FL,
-                             servo_left_duty);
-    ServoController_set_duty(&servo_controller, SERVO_WHEEL_FR,
-                             servo_right_duty);
-
-    vTaskDelay(100);
-  }
+  vTaskDelete(NULL);
 }
-
-void path_find_button_callback(void *argument, const GPIO_PinState state) {
+static void go_straight_button_callback(void *argument,
+                                        const GPIO_PinState state) {
   (void)argument;
 
   if (state == GPIO_PIN_RESET) {
-    start_path_find_test = true;
+    xTaskNotify(user_task_handle, 0, eNoAction);
   }
 }
 
+#elif defined(PATH_TRACK_TEST)
+/* path_track_test -----------------------------------------------------------*/
+static volatile bool start_path_find_test = false;
+void path_track_test(void *argument) {
+  (void)argument;
+
+  // wait for button to be pressed
+  xTaskNotifyWait(0, 0, NULL, portMAX_DELAY);
+
+  LedController_turn_on(&led_controller, LED_BUILTIN);
+  while (!is_90_deg) {
+    path_track_once();
+
+    vTaskDelay(100);
+  }
+
+  vTaskDelete(NULL);
+}
+
+void path_track_button_callback(void *argument, const GPIO_PinState state) {
+  (void)argument;
+
+  if (state == GPIO_PIN_RESET) {
+    xTaskNotify(user_task_handle, 0, eNoAction);
+  }
+}
+
+#elif defined(BUTTON_TEST)
+/* button_test ---------------------------------------------------------------*/
+static void button_test(void *argument) {
+  (void)argument;
+
+  vTaskDelete(NULL);
+}
+
+static void button_test_button_callback(void *_argument,
+                                        const GPIO_PinState state) {
+  uint32_t argument = (uint32_t)_argument;
+
+  switch (argument) {
+    case BUTTON_BUILTIN:
+      if (state == GPIO_PIN_RESET) {
+        LedController_turn_on(&led_controller, LED_BUILTIN);
+      } else {
+        LedController_turn_off(&led_controller, LED_BUILTIN);
+      }
+      break;
+
+    case BUTTON1:
+      if (state == GPIO_PIN_SET) {
+        LedController_turn_on(&led_controller, LED_GREEN);
+      } else {
+        LedController_turn_off(&led_controller, LED_GREEN);
+      }
+      break;
+
+    case BUTTON2:
+      if (state == GPIO_PIN_SET) {
+        LedController_turn_on(&led_controller, LED_YELLOW);
+      } else {
+        LedController_turn_off(&led_controller, LED_YELLOW);
+      }
+      break;
+
+    case BUTTON3:
+      if (state == GPIO_PIN_SET) {
+        LedController_turn_on(&led_controller, LED_RED);
+      } else {
+        LedController_turn_off(&led_controller, LED_RED);
+      }
+      break;
+
+    default:
+      break;
+  }
+}
+
+#elif defined(COMPONENT_TEST)
+/* component_test ------------------------------------------------------------*/
+static void component_test(void *argument) {
+  (void)argument;
+
+  vTaskDelete(NULL);
+}
+
+static void component_test_button_callback(void *_argument,
+                                           const GPIO_PinState state) {
+  uint32_t argument = (uint32_t)_argument;
+
+  switch (argument) {
+    case BUTTON_BUILTIN:
+      if (state == GPIO_PIN_RESET) {
+        LedController_turn_on(&led_controller, LED_BUILTIN);
+        ServoController_set_duty(&servo_controller, SERVO_WHEEL_FL, 1);
+        MotorController_set(&motor_controller, MOTOR_FL, MotorForward);
+      } else {
+        LedController_turn_off(&led_controller, LED_BUILTIN);
+        ServoController_set_duty(&servo_controller, SERVO_WHEEL_FL, 0);
+        MotorController_set(&motor_controller, MOTOR_FL, MotorStop);
+      }
+      break;
+
+    case BUTTON1:
+      if (state == GPIO_PIN_SET) {
+        LedController_turn_on(&led_controller, LED_GREEN);
+        ServoController_set_duty(&servo_controller, SERVO_WHEEL_FR, 1);
+        MotorController_set(&motor_controller, MOTOR_FR, MotorForward);
+      } else {
+        LedController_turn_off(&led_controller, LED_GREEN);
+        ServoController_set_duty(&servo_controller, SERVO_WHEEL_FR, 0);
+        MotorController_set(&motor_controller, MOTOR_FR, MotorStop);
+      }
+      break;
+
+    case BUTTON2:
+      if (state == GPIO_PIN_SET) {
+        LedController_turn_on(&led_controller, LED_YELLOW);
+        ServoController_set_duty(&servo_controller, SERVO_WHEEL_RL, 1);
+        MotorController_set(&motor_controller, MOTOR_RL, MotorForward);
+      } else {
+        LedController_turn_off(&led_controller, LED_YELLOW);
+        ServoController_set_duty(&servo_controller, SERVO_WHEEL_RL, 0);
+        MotorController_set(&motor_controller, MOTOR_RL, MotorStop);
+      }
+      break;
+
+    case BUTTON3:
+      if (state == GPIO_PIN_SET) {
+        LedController_turn_on(&led_controller, LED_RED);
+        ServoController_set_duty(&servo_controller, SERVO_WHEEL_RR, 1);
+        MotorController_set(&motor_controller, MOTOR_RR, MotorForward);
+      } else {
+        LedController_turn_off(&led_controller, LED_RED);
+        ServoController_set_duty(&servo_controller, SERVO_WHEEL_RR, 0);
+        MotorController_set(&motor_controller, MOTOR_RR, MotorStop);
+      }
+      break;
+
+    default:
+      break;
+  }
+}
+
+#elif defined(PRINT_TEST)
 /* print_test ----------------------------------------------------------------*/
-void print_test(void *argument) {
+static void print_test(void *argument) {
   (void)argument;
 
   while (1) {
@@ -290,8 +449,175 @@ void print_test(void *argument) {
   }
 }
 
-/* init_functions ------------------------------------------------------------*/
-void button_init(void) {
+#else
+static void user_task_code(void *argument) {
+  (void)argument;
+
+  // wait for button to be pressed
+  xTaskNotifyWait(0, 0, NULL, portMAX_DELAY);
+
+  LedController_turn_on(&led_controller, LED_BUILTIN);
+  MotorController_set(&motor_controller, MOTOR_RR, MotorBackward);
+
+  GPIO_PinState button_state;
+  do {
+    ButtonMonitor_read_state(&button_monitor, BUTTON_MICRO_FT, &button_state);
+    if (button_state == GPIO_PIN_SET) {
+      break;
+    }
+    vTaskDelay(100);
+  } while (1);
+
+  // while (!is_45_deg) {
+  //   path_track_once();
+  //   vTaskDelay(100);
+  // }
+
+  // MotorController_set(&motor_controller, MOTOR_RR, MotorForward);
+  // do {
+  //   ButtonMonitor_read_state(&button_monitor, BUTTON_MICRO_FB,
+  //   &button_state); if (button_state == GPIO_PIN_SET) {
+  //     break;
+  //   }
+  //   vTaskDelay(100);
+  // } while (1);
+
+  while (!is_90_deg) {
+    path_track_once();
+    vTaskDelay(100);
+  }
+
+  ServoController_set_duty(&servo_controller, SERVO_WHEEL_FL, 0);
+  ServoController_set_duty(&servo_controller, SERVO_WHEEL_FR, 0);
+  ServoController_set_duty(&servo_controller, SERVO_WHEEL_RL, 0);
+  ServoController_set_duty(&servo_controller, SERVO_WHEEL_RR, 0);
+
+  vTaskDelete(NULL);
+}
+
+static void user_button_callback(void *_argument, const GPIO_PinState state) {
+  if (state == GPIO_PIN_RESET) {
+    xTaskNotify(user_task_handle, 0, eNoAction);
+  }
+}
+
+static void operate_wings_button_callback(void *_argument,
+                                          const GPIO_PinState state) {
+  uint32_t argument = (uint32_t)_argument;
+
+  GPIO_PinState button_state;
+  switch (argument) {
+    case BUTTON1:
+      if (state == GPIO_PIN_SET) {
+        ButtonMonitor_read_state(&button_monitor, BUTTON_MICRO_FB,
+                                 &button_state);
+        if (button_state != GPIO_PIN_SET) {
+          MotorController_set(&motor_controller, MOTOR_RR, MotorForward);
+        }
+      } else {
+        MotorController_set(&motor_controller, MOTOR_RR, MotorStop);
+      }
+      break;
+
+    case BUTTON2:
+      if (state == GPIO_PIN_SET) {
+        ButtonMonitor_read_state(&button_monitor, BUTTON_MICRO_FT,
+                                 &button_state);
+        if (button_state != GPIO_PIN_SET) {
+          MotorController_set(&motor_controller, MOTOR_RR, MotorBackward);
+        }
+      } else {
+        MotorController_set(&motor_controller, MOTOR_RR, MotorStop);
+      }
+      break;
+
+    default:
+      break;
+  }
+}
+
+static void stop_wings_button_callback(void *_argument,
+                                       const GPIO_PinState state) {
+  uint32_t argument = (uint32_t)_argument;
+
+  switch (argument) {
+    case BUTTON_MICRO_FB:
+      if (state == GPIO_PIN_SET) {
+        MotorController_set(&motor_controller, MOTOR_RR, MotorStop);
+      }
+      break;
+
+    case BUTTON_MICRO_FT:
+      if (state == GPIO_PIN_SET) {
+        MotorController_set(&motor_controller, MOTOR_RR, MotorStop);
+      }
+      break;
+
+    default:
+      break;
+  }
+}
+
+#endif
+
+static void running_indicator_task_code(void *argument) {
+  (void)argument;
+
+  MotorController_set(&motor_controller, MOTOR_FR, MotorStop);
+  while (1) {
+    LedController_turn_on(&led_controller, LED_GREEN);
+#ifdef ENABLE_ALARM
+    MotorController_set(&motor_controller, MOTOR_FR, MotorForward);
+#endif  // ENABLE_ALARM
+    vTaskDelay(250);
+    LedController_turn_off(&led_controller, LED_GREEN);
+#ifdef ENABLE_ALARM
+    MotorController_set(&motor_controller, MOTOR_FR, MotorStop);
+#endif  // ENABLE_ALARM
+    vTaskDelay(250);
+  }
+}
+
+static void mpu6050_task_code(void *argument) {
+  (void)argument;
+
+  while (1) {
+    uint16_t len = 4;
+    static int16_t gs_accel_raw[4][3];
+    static float gs_accel_g[4][3];
+    static int16_t gs_gyro_raw[4][3];
+    static float gs_gyro_dps[4][3];
+    static int32_t gs_quat[4][4];
+    static float gs_pitch[4];
+    static float gs_roll[4];
+    static float gs_yaw[4];
+
+    vTaskDelay(200);
+
+    /* read */
+    if (mpu6050_dmp_read_all(gs_accel_raw, gs_accel_g, gs_gyro_raw, gs_gyro_dps,
+                             gs_quat, gs_pitch, gs_roll, gs_yaw, &len) != 0) {
+      Error_Handler();
+    }
+
+    if (gs_yaw[len - 1] > 16) {
+      is_45_deg = true;
+      is_90_deg = true;
+      LedController_turn_on(&led_controller, LED_RED);
+    } else if (gs_yaw[len - 1] > 6.7) {
+      is_45_deg = true;
+      is_90_deg = false;
+      LedController_turn_off(&led_controller, LED_RED);
+    } else {
+      is_45_deg = false;
+      is_90_deg = false;
+      LedController_turn_off(&led_controller, LED_RED);
+    }
+  }
+}
+
+/* init functions ------------------------------------------------------------*/
+static void button_init(void) {
   ButtonMonitor_ctor(&button_monitor);
   // should be in the same order as taht in project_def.h
   ButtonMonitor_add_button(&button_monitor, &button_cb[BUTTON_BUILTIN],
@@ -315,90 +641,73 @@ void button_init(void) {
   ButtonMonitor_register_callback(&button_monitor, BUTTON_BUILTIN,
                                   &max_power_button_callback, NULL);
 #elif defined(LIFT_TEST)
-  ButtonMonitor_register_callback(&button_monitor, BUTTON_BUILTIN,
-                                  &lift_button_callback,
-                                  (void *)BUTTON_BUILTIN);
+  ButtonMonitor_register_callback(&button_monitor, BUTTON1,
+                                  &operate_wings_button_callback,
+                                  (void *)BUTTON1);
+  ButtonMonitor_register_callback(&button_monitor, BUTTON2,
+                                  &operate_wings_button_callback,
+                                  (void *)BUTTON2);
   ButtonMonitor_register_callback(&button_monitor, BUTTON_MICRO_FB,
-                                  &lift_button_callback,
+                                  &stop_wings_button_callback,
                                   (void *)BUTTON_MICRO_FB);
   ButtonMonitor_register_callback(&button_monitor, BUTTON_MICRO_FT,
-                                  &lift_button_callback,
+                                  &stop_wings_button_callback,
                                   (void *)BUTTON_MICRO_FT);
-  ButtonMonitor_register_callback(&button_monitor, BUTTON_MICRO_RB,
-                                  &lift_button_callback,
-                                  (void *)BUTTON_MICRO_RB);
-  ButtonMonitor_register_callback(&button_monitor, BUTTON_MICRO_RT,
-                                  &lift_button_callback,
-                                  (void *)BUTTON_MICRO_RT);
-#elif defined(PATH_FIND_TEST)
+#elif defined(GO_STRAIGHT_TEST)
   ButtonMonitor_register_callback(&button_monitor, BUTTON_BUILTIN,
-                                  &path_find_button_callback, NULL);
+                                  &go_straight_button_callback, NULL);
+#elif defined(PATH_TRACK_TEST)
+  ButtonMonitor_register_callback(&button_monitor, BUTTON_BUILTIN,
+                                  &path_track_button_callback, NULL);
+#elif defined(BUTTON_TEST)
+  ButtonMonitor_register_callback(&button_monitor, BUTTON_BUILTIN,
+                                  &button_test_button_callback,
+                                  (void *)BUTTON_BUILTIN);
+  ButtonMonitor_register_callback(
+      &button_monitor, BUTTON1, &button_test_button_callback, (void *)BUTTON1);
+  ButtonMonitor_register_callback(
+      &button_monitor, BUTTON2, &button_test_button_callback, (void *)BUTTON2);
+  ButtonMonitor_register_callback(
+      &button_monitor, BUTTON3, &button_test_button_callback, (void *)BUTTON3);
+#elif defined(COMPONENT_TEST)
+  ButtonMonitor_register_callback(&button_monitor, BUTTON_BUILTIN,
+                                  &component_test_button_callback,
+                                  (void *)BUTTON_BUILTIN);
+  ButtonMonitor_register_callback(&button_monitor, BUTTON1,
+                                  &component_test_button_callback,
+                                  (void *)BUTTON1);
+  ButtonMonitor_register_callback(&button_monitor, BUTTON2,
+                                  &component_test_button_callback,
+                                  (void *)BUTTON2);
+  ButtonMonitor_register_callback(&button_monitor, BUTTON3,
+                                  &component_test_button_callback,
+                                  (void *)BUTTON3);
+#elif defined(WRITE_EEPROM_TEST)
+  ButtonMonitor_register_callback(&button_monitor, BUTTON_BUILTIN,
+                                  &filter_calibration_button_callback, NULL);
+#else
+  ButtonMonitor_register_callback(&button_monitor, BUTTON_BUILTIN,
+                                  &user_button_callback, NULL);
+  ButtonMonitor_register_callback(&button_monitor, BUTTON1,
+                                  &operate_wings_button_callback,
+                                  (void *)BUTTON1);
+  ButtonMonitor_register_callback(&button_monitor, BUTTON2,
+                                  &operate_wings_button_callback,
+                                  (void *)BUTTON2);
+  ButtonMonitor_register_callback(&button_monitor, BUTTON3,
+                                  &filter_calibration_button_callback, NULL);
+  ButtonMonitor_register_callback(&button_monitor, BUTTON_MICRO_FB,
+                                  &stop_wings_button_callback,
+                                  (void *)BUTTON_MICRO_FB);
+  ButtonMonitor_register_callback(&button_monitor, BUTTON_MICRO_FT,
+                                  &stop_wings_button_callback,
+                                  (void *)BUTTON_MICRO_FT);
 #endif
 
   ButtonMonitor_start(&button_monitor);
 }
 
-void filter_init(void) {
-  MovingAverageFilter_ctor(
-      &grayscale_moving_average_filter[MOVING_AVERAGE_FILTER_ANALOG_FL1],
-      grayscale_moving_average_buffer[MOVING_AVERAGE_FILTER_ANALOG_FL1],
-      MOVING_AVERAGE_FILTER_MOVING_AVERAGE_SIZE, NULL);
-  MovingAverageFilter_ctor(
-      &grayscale_moving_average_filter[MOVING_AVERAGE_FILTER_ANALOG_FL2],
-      grayscale_moving_average_buffer[MOVING_AVERAGE_FILTER_ANALOG_FL2],
-      MOVING_AVERAGE_FILTER_MOVING_AVERAGE_SIZE, NULL);
-  MovingAverageFilter_ctor(
-      &grayscale_moving_average_filter[MOVING_AVERAGE_FILTER_ANALOG_FR1],
-      grayscale_moving_average_buffer[MOVING_AVERAGE_FILTER_ANALOG_FR1],
-      MOVING_AVERAGE_FILTER_MOVING_AVERAGE_SIZE, NULL);
-  MovingAverageFilter_ctor(
-      &grayscale_moving_average_filter[MOVING_AVERAGE_FILTER_ANALOG_FR2],
-      grayscale_moving_average_buffer[MOVING_AVERAGE_FILTER_ANALOG_FR2],
-      MOVING_AVERAGE_FILTER_MOVING_AVERAGE_SIZE, NULL);
-  MovingAverageFilter_ctor(
-      &grayscale_moving_average_filter[MOVING_AVERAGE_FILTER_ANALOG_RL],
-      grayscale_moving_average_buffer[MOVING_AVERAGE_FILTER_ANALOG_RL],
-      MOVING_AVERAGE_FILTER_MOVING_AVERAGE_SIZE, NULL);
-  MovingAverageFilter_ctor(
-      &grayscale_moving_average_filter[MOVING_AVERAGE_FILTER_ANALOG_RR],
-      grayscale_moving_average_buffer[MOVING_AVERAGE_FILTER_ANALOG_RR],
-      MOVING_AVERAGE_FILTER_MOVING_AVERAGE_SIZE, NULL);
-
-  NormalizeFilter_ctor(&grayscale_normalize_filer[NORMALIZE_FILTER_ANALOG_FL1],
-                       NORMALIZE_FILTER_LOWER_BOUND_ANALOG_FL1,
-                       NORMALIZE_FILTER_LOWER_BOUND_ANALOG_FL1,
-                       (Filter *)&grayscale_moving_average_filter
-                           [MOVING_AVERAGE_FILTER_ANALOG_FL1]);
-  NormalizeFilter_ctor(&grayscale_normalize_filer[NORMALIZE_FILTER_ANALOG_FL2],
-                       NORMALIZE_FILTER_LOWER_BOUND_ANALOG_FL2,
-                       NORMALIZE_FILTER_LOWER_BOUND_ANALOG_FL2,
-                       (Filter *)&grayscale_moving_average_filter
-                           [MOVING_AVERAGE_FILTER_ANALOG_FL2]);
-  NormalizeFilter_ctor(&grayscale_normalize_filer[NORMALIZE_FILTER_ANALOG_FR1],
-                       NORMALIZE_FILTER_LOWER_BOUND_ANALOG_FR1,
-                       NORMALIZE_FILTER_LOWER_BOUND_ANALOG_FR1,
-                       (Filter *)&grayscale_moving_average_filter
-                           [MOVING_AVERAGE_FILTER_ANALOG_FR1]);
-  NormalizeFilter_ctor(&grayscale_normalize_filer[NORMALIZE_FILTER_ANALOG_FR2],
-                       NORMALIZE_FILTER_LOWER_BOUND_ANALOG_FR2,
-                       NORMALIZE_FILTER_LOWER_BOUND_ANALOG_FR2,
-                       (Filter *)&grayscale_moving_average_filter
-                           [MOVING_AVERAGE_FILTER_ANALOG_FR2]);
-  NormalizeFilter_ctor(
-      &grayscale_normalize_filer[NORMALIZE_FILTER_ANALOG_RL],
-      NORMALIZE_FILTER_LOWER_BOUND_ANALOG_RL,
-      NORMALIZE_FILTER_LOWER_BOUND_ANALOG_RL,
-      (Filter
-           *)&grayscale_moving_average_filter[MOVING_AVERAGE_FILTER_ANALOG_RL]);
-  NormalizeFilter_ctor(
-      &grayscale_normalize_filer[NORMALIZE_FILTER_ANALOG_RR],
-      NORMALIZE_FILTER_LOWER_BOUND_ANALOG_RR,
-      NORMALIZE_FILTER_LOWER_BOUND_ANALOG_RR,
-      (Filter
-           *)&grayscale_moving_average_filter[MOVING_AVERAGE_FILTER_ANALOG_RR]);
-}
-
-void led_init(void) {
+static void led_init(void) {
   LedController_ctor(&led_controller);
   // should be in the same order as taht in project_def.h
   LedController_add_led(&led_controller, &led_cb[LED_BUILTIN], LED_BUILTIN_PORT,
@@ -412,7 +721,7 @@ void led_init(void) {
   LedController_start(&led_controller);
 }
 
-void servo_init(void) {
+static void servo_init(void) {
   ServoController_ctor(&servo_controller);
   // should be in the same order as taht in project_def.h
   ServoController_add_servo(&servo_controller, &servo_cb[SERVO_WHEEL_FL],
@@ -424,9 +733,18 @@ void servo_init(void) {
   ServoController_add_servo(&servo_controller, &servo_cb[SERVO_WHEEL_RR],
                             SERVO_WHEEL_RR_TIM, SERVO_WHEEL_RR_TIM_CHANNEL);
   ServoController_start(&servo_controller);
+
+  ServoController_set_direction(&servo_controller, SERVO_WHEEL_FL,
+                                SERVO_COUNTER_CLOCKWISE);
+  ServoController_set_direction(&servo_controller, SERVO_WHEEL_FR,
+                                SERVO_CLOCKWISE);
+  ServoController_set_direction(&servo_controller, SERVO_WHEEL_RL,
+                                SERVO_COUNTER_CLOCKWISE);
+  ServoController_set_direction(&servo_controller, SERVO_WHEEL_RR,
+                                SERVO_CLOCKWISE);
 }
 
-void motor_init(void) {  // motor controller
+static void motor_init(void) {  // motor controller
   MotorController_ctor(&motor_controller);
   // should be in the same order as taht in project_def.h
   MotorController_add_motor(&motor_controller, &motor_cb[MOTOR_FL],
@@ -447,34 +765,47 @@ void motor_init(void) {  // motor controller
   MotorController_set(&motor_controller, MOTOR_RR, MotorStop);
 }
 
+static void a_receive_callback(uint8_t type) {
+  switch (type) {
+    case MPU6050_INTERRUPT_MOTION: {
+      mpu6050_interface_debug_print("mpu6050: irq motion.\n");
+
+      break;
+    }
+    case MPU6050_INTERRUPT_FIFO_OVERFLOW: {
+      mpu6050_interface_debug_print("mpu6050: irq fifo overflow.\n");
+
+      break;
+    }
+    case MPU6050_INTERRUPT_I2C_MAST: {
+      mpu6050_interface_debug_print("mpu6050: irq i2c master.\n");
+
+      break;
+    }
+    case MPU6050_INTERRUPT_DMP: {
+      mpu6050_interface_debug_print("mpu6050: irq dmp\n");
+
+      break;
+    }
+    case MPU6050_INTERRUPT_DATA_READY: {
+      mpu6050_interface_debug_print("mpu6050: irq data ready\n");
+
+      break;
+    }
+    default: {
+      mpu6050_interface_debug_print("mpu6050: irq unknown code.\n");
+
+      break;
+    }
+  }
+}
+
 /* callback function ---------------------------------------------------------*/
 int __io_putchar(int ch) {
   HAL_UART_Transmit(&huart2, (uint8_t *)&ch, 1, HAL_MAX_DELAY);
   return ch;
 }
 
-void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc) {
-  if (hadc == &hadc1) {
-    NormalizeFilter_update(&grayscale_normalize_filer[ANALOG_FL1],
-                           adc1_buffer[ANALOG_FL1] / 4096.0, NULL);
-    NormalizeFilter_update(&grayscale_normalize_filer[ANALOG_FL2],
-                           adc1_buffer[ANALOG_FL2] / 4096.0, NULL);
-    NormalizeFilter_update(&grayscale_normalize_filer[ANALOG_FR1],
-                           adc1_buffer[ANALOG_FR1] / 4096.0, NULL);
-    NormalizeFilter_update(&grayscale_normalize_filer[ANALOG_FR2],
-                           adc1_buffer[ANALOG_FR2] / 4096.0, NULL);
-    NormalizeFilter_update(&grayscale_normalize_filer[ANALOG_RL],
-                           adc1_buffer[ANALOG_RL] / 4096.0, NULL);
-    NormalizeFilter_update(&grayscale_normalize_filer[ANALOG_RR],
-                           adc1_buffer[ANALOG_RR] / 4096.0, NULL);
-#ifdef PRINT_GRAYSCALE_DATA
-    printf("%f %f\n", adc1_buffer[ANALOG_FL1] / 4096.0,
-           adc1_buffer[ANALOG_FR1] / 4096.0);
-#endif  // PRINT_GRAYSCALE_DATA
-  }
-}
-
-extern void Error_Handler();
 void __module_assert_fail(const char *assertion, const char *file,
                           unsigned int line, const char *function) {
   (void)assertion;
@@ -484,3 +815,5 @@ void __module_assert_fail(const char *assertion, const char *file,
 
   Error_Handler();
 }
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) { mpu6050_dmp_irq_handler(); }
